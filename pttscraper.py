@@ -184,10 +184,10 @@ def main(board=None, n_pages=None, fname=None):
         ymd = datetime.now().strftime('%Y%m%d')
         fname = board + '_' + ymd + '.csv'
     
-    next_to_last = IndexPage(host+'/bbs/Gossiping/index.html').get_prev_page()
+    next_to_last = IndexPage(host+'/bbs/'+board+'/index.html').get_prev_page()
     for p in progressbar(list(range(next_to_last-n_pages+2, next_to_last+1)) + ['']):
         start = time.time()
-        index_page = IndexPage(host+'/bbs/Gossiping/index'+str(p)+'.html')
+        index_page = IndexPage(host+'/bbs/'+board+'/index'+str(p)+'.html')
         index_page.write(fname)
         end = time.time()
         elapsed = end - start
@@ -199,7 +199,7 @@ def main(board=None, n_pages=None, fname=None):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-b', dest='board')
-    parser.add_argument('-p', dest='n_pages')
+    parser.add_argument('-p', dest='n_pages', type=int)
     parser.add_argument('-f', dest='fname')
     args = parser.parse_args()
     main(args.board, args.n_pages, args.fname)
