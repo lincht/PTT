@@ -31,7 +31,7 @@ You can scrape any number of pages from any board you like, by specifying the fo
 | -p   | number of pages to scrape   |
 | -f   | output file name            |
 
-Sample command:
+Example command:
 
 ```shell
 $ python pttscraper.py -b Stock -p 100 -f output.csv
