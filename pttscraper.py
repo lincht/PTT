@@ -23,6 +23,8 @@ class PTTPage(object):
             try:
                 r = requests.get(self.url, cookies=cookies)
             except:
+                print('\nConnection failed. Retrying.')
+                time.sleep(5)
                 continue
             if r.status_code == 200:
                 break
@@ -101,7 +103,9 @@ class ArticlePage(PTTPage):
     
     def check_integrity(self):
         """Check article metadata for integrity."""
-        return len(self.soup.select('.article-meta-value')) == 4
+        metas = self.soup.select('.article-meta-value')
+        board = re.search(r'bbs/(.*?)/', self.url).group(1)
+        return len(metas) == 4 and metas[1].text == board
     
     def get_author(self):
         text = self.soup.select('.article-meta-value')[0].get_text()
@@ -147,11 +151,21 @@ class ArticlePage(PTTPage):
             try:
                 r = requests.get('http://www.geoplugin.net/json.gp?ip='+ip)
             except:
+                print('\nConnection failed. Retrying.')
+                time.sleep(5)
                 continue
             if r.status_code == 200:
                 break
         geo_json = r.text
-        geo_dict = json.loads(geo_json)
+        try:
+            geo_dict = json.loads(geo_json)
+        except:
+            # Fix countryName for Myanmar, which causes json parser to fail
+            burma_regex = r'[\s\[]*Burma[\s\]]*'
+            burma = re.search(burma_regex, geo_json)
+            if burma:
+                geo_json = re.sub(burma_regex, '', geo_json)
+                geo_dict = json.loads(geo_json)
         return geo_dict['geoplugin_city'], geo_dict['geoplugin_countryName']
     
     def push_counts(self):
