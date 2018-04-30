@@ -143,7 +143,8 @@ class ArticlePage(PTTPage):
         try:
             return datetime.strptime(text, '%a %b %d %H:%M:%S %Y').strftime('%Y-%m-%d %H:%M:%S')
         except:
-            # Fix accidentally deleted year
+            # Fix incomplete or missing year
+            text = re.match(r'(.*\d{2}:\d{2}:\d{2}).*', text).group(1)
             date = datetime.strptime(text, '%a %b %d %H:%M:%S')
             date = date.replace(year=datetime.now().year)
             return date.strftime('%Y-%m-%d %H:%M:%S')
