@@ -26,7 +26,9 @@ class PTTPage(object):
                 print('\nConnection failed. Retrying.')
                 time.sleep(5)
                 continue
-            if r.status_code == 200:
+            # Allow 404 to let empty articles pass,
+            # which will fail the integrity test anyway
+            if r.status_code in [200, 404]:
                 break
         self.text = r.text
         self.soup = BeautifulSoup(self.text, 'lxml')
@@ -44,12 +46,14 @@ class IndexPage(PTTPage):
         as_ = self.soup.select('.title a')
         titles = [a.get_text() for a in as_]
         urls = [host+a['href'] for a in as_]
-        # Skip pinned articles, which may have a special format
-        to_remove = [i for i, t in enumerate(titles) if re.search(r'置底', t)]
+        # Skip announcements and pinned articles, which may have a special format
+        to_remove = [i for i, t in enumerate(titles) if re.search('^\[公告\]|置底', t)]
         urls = [u for i, u in enumerate(urls) if i not in to_remove]
         articles = [ArticlePage(u) for u in urls]
-        # Keep only articles whose integrity is intact, and skip announcements
-        articles = [a for a in articles if a.integrity and not re.match(r'\[公告\]', a.title)]
+        # Keep only intact, non-forward articles
+        # Note: If an article is damaged and thus lacks .forward attribute,
+        # the predicate expr will still evaluate to False due to short-circuit.
+        articles = [a for a in articles if a.integrity and not a.forward]
         
         authors = [a.author for a in articles]
         aliases = [a.alias for a in articles]
@@ -93,20 +97,31 @@ class ArticlePage(PTTPage):
         super().__init__(url)
         self.integrity = self.check_integrity()
         if self.integrity:
-            self.author = self.get_author()
-            self.alias = self.get_alias()
-            self.title = self.get_title()
-            self.date = self.get_date()
-            self.ip = self.get_ip()
-            self.loc = self.get_loc()
-            self.push_counts = self.push_counts()
+            self.forward = self.is_forward()
+            if not self.forward:
+                self.author = self.get_author()
+                self.alias = self.get_alias()
+                self.title = self.get_title()
+                self.date = self.get_date()
+                self.ip = self.get_ip()
+                self.loc = self.get_loc()
+                self.push_counts = self.push_counts()
     
     def check_integrity(self):
         """Check article metadata for integrity."""
         metas = self.soup.select('.article-meta-value')
         board = re.search(r'bbs/(.*?)/', self.url).group(1)
         return len(metas) == 4 and metas[1].text == board
-    
+
+    def is_forward(self):
+        """Check if the current article is a forward."""
+        spans = self.soup.select('.f2')
+        forward = re.search(r'本文轉錄自', spans[0].text)
+        if forward:
+            return True
+        else:
+            return False
+
     def get_author(self):
         text = self.soup.select('.article-meta-value')[0].get_text()
         return re.search(r'([^(]*)', text).group(1).rstrip()
