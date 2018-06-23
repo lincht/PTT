@@ -8,6 +8,7 @@ from collections import Counter
 from progressbar import progressbar
 import requests
 from bs4 import BeautifulSoup
+import numpy as np
 import pandas as pd
 
 
@@ -42,12 +43,15 @@ class IndexPage(PTTPage):
         return int(re.search(r'index(\d*).html', prev_url).group(1))
     
     def get_articles(self):
-        """Return all articles listed on the index page as a DataFrame."""
+        """Return all articles listed on the index page, and push data
+        corresponding to each article as two separate DataFrames.
+        """
         as_ = self.soup.select('.title a')
         titles = [a.get_text() for a in as_]
         urls = [host+a['href'] for a in as_]
         # Skip announcements and pinned articles, which may have a special format
-        to_remove = [i for i, t in enumerate(titles) if re.search('^\[公告\]|置底', t)]
+        to_remove = [i for i, t in enumerate(titles)
+                     if re.search('^\[公告\]|置底|\^[協尋\]', t)]
         urls = [u for i, u in enumerate(urls) if i not in to_remove]
         articles = [ArticlePage(u) for u in urls]
         # Keep only intact, non-forward articles
@@ -67,6 +71,8 @@ class IndexPage(PTTPage):
         downs = [p['噓'] for p in pushes]
         comments = [p['→'] for p in pushes]
         urls = [a.url for a in articles]
+        # Get push data for each article
+        push_data = pd.concat([a.push_data for a in articles if a.push_data is not None])
         articles = pd.DataFrame(dict(author=authors,
                                      alias=aliases,
                                      title=titles,
@@ -79,16 +85,18 @@ class IndexPage(PTTPage):
                                      comments=comments,
                                      url=urls))
         return articles[['author', 'alias', 'title', 'date', 'ip', 'city', 'country',
-                         'ups', 'downs', 'comments', 'url']]
+                         'ups', 'downs', 'comments', 'url']], push_data
     
     def write(self, fname):
-        """Write DataFrame to a csv file."""
-        articles = self.get_articles()
-        if os.path.isfile(fname):
-            with open(fname, 'a') as f:
-                articles.to_csv(f, header=False, index=False)
-        else:
+        """Write articles and push data to two csv files."""
+        articles, push_data = self.get_articles()
+        push_fname = fname[:-4] + '_push.csv'
+        if not os.path.isfile(fname):
             articles.to_csv(fname, index=False)
+            push_data.to_csv(push_fname, index=False)
+        else:
+            articles.to_csv(fname, mode='a', header=False, index=False)
+            push_data.to_csv(push_fname, mode='a', header=False, index=False)
 
 
 class ArticlePage(PTTPage):
@@ -106,6 +114,7 @@ class ArticlePage(PTTPage):
                 self.ip = self.get_ip()
                 self.loc = self.get_loc()
                 self.push_counts = self.push_counts()
+                self.push_data = self.get_push_data()
     
     def check_integrity(self):
         """Check article metadata for integrity."""
@@ -161,8 +170,9 @@ class ArticlePage(PTTPage):
             ip = re.search(r'\(([0-9.]*)\)', text).group(1)
         return ip
     
-    def get_loc(self):
-        ip = self.get_ip()
+    def get_loc(self, ip=None):
+        if ip is None:
+            ip = self.get_ip()
         while True:
             try:
                 r = requests.get('http://www.geoplugin.net/json.gp?ip='+ip)
@@ -187,6 +197,47 @@ class ArticlePage(PTTPage):
     def push_counts(self):
         push_tags = self.soup.select('span[class*="push-tag"]')
         return Counter([t.get_text().rstrip() for t in push_tags])
+
+    def get_push_data(self):
+        # More robust to first isolate push contents
+        main_content = str(self.soup.select('div#main-content')[0])
+        push_soup = BeautifulSoup(
+            main_content[main_content.find('<span class="f2">※ 發信站: 批踢踢實業坊(ptt.cc)'):],
+            'lxml')
+        authors = [s.text for s in push_soup.select('span[class*="f3 hl push-userid"]')]
+        # Return None if no push contents
+        if not authors:
+            return None
+        push_map = {'推': 1, '→': 0, '噓': -1}
+        pushes = [push_map[s.text[0]] for s in push_soup.select('span[class*="push-tag"]')]
+        texts = [s.text[2:] for s in push_soup.select('span[class*="f3 push-content"]')]
+        ip_dts = [s.text.strip() for s in push_soup.select('span[class*="push-ipdatetime"]')]
+        ips = [re.match(r'\d{,3}[.]{1}\d{,3}[.]{1}\d{,3}[.]{1}\d{,3}', ip_dt).group()
+               if re.match(r'\d{,3}[.]{1}\d{,3}[.]{1}\d{,3}[.]{1}\d{,3}', ip_dt) else np.nan
+               for ip_dt in ip_dts]
+        # Query only once for each unique IP to save time
+        unique_ips = set(ips)
+        # Handle missing IPs
+        unique_locs = [self.get_loc(ip) if type(ip) == str else (np.nan, np.nan)
+                       for ip in unique_ips]
+        to_loc = {ip: loc for ip, loc in zip(unique_ips, unique_locs)}
+        locs = [to_loc[ip] for ip in ips]
+        cities, countries = tuple(zip(*locs))
+        year = self.soup.select('.article-meta-value')[3].text.split(' ')[4]
+        dts = [year+'/'+re.search(r'\d{2}/\d{2} \d{2}:\d{2}', ip_dt).group()+':00'
+               if re.search(r'\d{2}/\d{2} \d{2}:\d{2}', ip_dt) else np.nan
+               for ip_dt in ip_dts]
+        dts = [datetime.strptime(dt, '%Y/%m/%d %H:%M:%S').strftime('%Y-%m-%d %H:%M:%S')
+               if type(dt) == str else np.nan for dt in dts]
+        push_data = pd.DataFrame(dict(url=self.url,
+                                      author=authors,
+                                      push=pushes,
+                                      text=texts,
+                                      ip=ips,
+                                      city=cities,
+                                      country=countries,
+                                      dt=dts))
+        return push_data[['url', 'author', 'push', 'text', 'ip', 'city', 'country', 'dt']]
 
 
 def main(board=None, n_pages=None, fname=None):
