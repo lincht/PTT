@@ -51,7 +51,7 @@ class IndexPage(PTTPage):
         urls = [host+a['href'] for a in as_]
         # Skip announcements and pinned articles, which may have a special format
         to_remove = [i for i, t in enumerate(titles)
-                     if re.search('^\[公告\]|置底|\^[協尋\]', t)]
+                     if re.search('^\[公告\]|置底|^\[協尋\]', t)]
         urls = [u for i, u in enumerate(urls) if i not in to_remove]
         articles = [ArticlePage(u) for u in urls]
         # Keep only intact, non-forward articles
