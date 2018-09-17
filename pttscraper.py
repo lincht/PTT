@@ -15,6 +15,62 @@ import pandas as pd
 host = 'https://www.ptt.cc'
 
 
+class IPCache(dict):
+    
+    def __init__(self, fname='ip_cache.json'):
+        self.fname = fname
+        self.load()
+    
+    def load(self):
+        if os.path.isfile(self.fname):
+            with open(self.fname, 'r') as fp:
+                self._cache = json.load(fp)
+        else:
+            self._cache = dict()
+    
+    def dump(self):
+        with open(self.fname, 'w') as fp:
+            json.dump(self._cache, fp)
+    
+    def __repr__(self):
+        return repr(self._cache)
+    
+    def __setitem__(self, key, item):
+        self._cache[key] = item
+    
+    def __getitem__(self, key):
+        return self._cache[key]
+    
+    def __contains__(self, item):
+        return item in self._cache
+
+
+class RequestQueuer(object):
+    
+    def __init__(self):
+        self.counter = 0
+        self.first = None
+    
+    def update(self):
+        
+        if self.first is None:
+            self.first = time.time()
+            self.counter += 1
+            return
+        else:
+            self.last = time.time()
+            self.counter += 1
+        
+        # Make sure not to exceed limit of 120 requests/min
+        if self.counter == 120:
+            delta = self.last - self.first
+            if delta < 60:
+                print('waiting')
+                time.sleep(60-delta)
+            self.counter = 0
+            self.first = None
+
+
 class PTTPage(object):
     
     def __init__(self, url):
@@ -24,7 +80,7 @@ class PTTPage(object):
             try:
                 r = requests.get(self.url, cookies=cookies)
             except:
-                print('\nConnection failed. Retrying.')
+                print('\nPTT connection failed. Retrying.')
                 time.sleep(5)
                 continue
             # Allow 404 to let empty articles pass,
@@ -37,6 +93,10 @@ class PTTPage(object):
 
 class IndexPage(PTTPage):
     
+    def __init__(self, url, geolocate):
+        super().__init__(url)
+        self.geolocate = geolocate
+
     def get_prev_page(self):
         """Return page number of the page before this one."""
         prev_url = self.soup.select('a[class*="btn wide"]')[1]['href']
@@ -53,7 +113,7 @@ class IndexPage(PTTPage):
         to_remove = [i for i, t in enumerate(titles)
                      if re.search('^\[公告\]|置底|^\[協尋\]', t)]
         urls = [u for i, u in enumerate(urls) if i not in to_remove]
-        articles = [ArticlePage(u) for u in urls]
+        articles = [ArticlePage(u, self.geolocate) for u in urls]
         # Keep only intact, non-forward articles
         # Note: If an article is damaged and thus lacks .forward attribute,
         # the predicate expr will still evaluate to False due to short-circuit.
@@ -101,9 +161,11 @@ class IndexPage(PTTPage):
 
 class ArticlePage(PTTPage):
     
-    def __init__(self, url):
+    def __init__(self, url, geolocate):
+        print('Getting', url)
         super().__init__(url)
         self.integrity = self.check_integrity()
+        self.geolocate = geolocate
         if self.integrity:
             self.forward = self.is_forward()
             if not self.forward:
@@ -112,7 +174,10 @@ class ArticlePage(PTTPage):
                 self.title = self.get_title()
                 self.date = self.get_date()
                 self.ip = self.get_ip()
-                self.loc = self.get_loc()
+                if geolocate:
+                    self.loc = self.get_loc()
+                else:
+                    self.loc = '', ''
                 self.push_counts = self.push_counts()
                 self.push_data = self.get_push_data()
     
@@ -171,28 +236,41 @@ class ArticlePage(PTTPage):
         return ip
     
     def get_loc(self, ip=None):
+        """Return (city, country) tuple corresponding to the given IP."""
+        
         if ip is None:
             ip = self.get_ip()
-        while True:
+        
+        if ip in cache:
+            return cache[ip]
+        else:
+            # Get response
+            while True:
+                try:
+                    r = requests.get('http://www.geoplugin.net/json.gp?ip='+ip)
+                    queuer.update()
+                except:
+                    print('\nGeoplugin connection failed. Retrying.')
+                    time.sleep(5)
+                    continue
+                if r.status_code == 200:
+                    break
+            geo_json = r.text
+            
+            # Parse response
             try:
-                r = requests.get('http://www.geoplugin.net/json.gp?ip='+ip)
-            except:
-                print('\nConnection failed. Retrying.')
-                time.sleep(5)
-                continue
-            if r.status_code == 200:
-                break
-        geo_json = r.text
-        try:
-            geo_dict = json.loads(geo_json)
-        except:
-            # Fix countryName for Myanmar, which causes json parser to fail
-            burma_regex = r'[\s\[]*Burma[\s\]]*'
-            burma = re.search(burma_regex, geo_json)
-            if burma:
-                geo_json = re.sub(burma_regex, '', geo_json)
                 geo_dict = json.loads(geo_json)
-        return geo_dict['geoplugin_city'], geo_dict['geoplugin_countryName']
+            except:
+                # Fix countryName for Myanmar, which causes json parser to fail
+                burma_regex = r'[\s\[]*Burma[\s\]]*'
+                burma = re.search(burma_regex, geo_json)
+                if burma:
+                    geo_json = re.sub(burma_regex, '', geo_json)
+                    geo_dict = json.loads(geo_json)
+            city, country = geo_dict['geoplugin_city'], geo_dict['geoplugin_countryName']
+            
+            cache[ip] = city, country
+            return city, country
     
     def push_counts(self):
         push_tags = self.soup.select('span[class*="push-tag"]')
@@ -215,15 +293,24 @@ class ArticlePage(PTTPage):
         ips = [re.match(r'\d{,3}[.]{1}\d{,3}[.]{1}\d{,3}[.]{1}\d{,3}', ip_dt).group()
                if re.match(r'\d{,3}[.]{1}\d{,3}[.]{1}\d{,3}[.]{1}\d{,3}', ip_dt) else np.nan
                for ip_dt in ip_dts]
-        # Query only once for each unique IP to save time
-        unique_ips = set(ips)
-        # Handle missing IPs
-        unique_locs = [self.get_loc(ip) if type(ip) == str else (np.nan, np.nan)
-                       for ip in unique_ips]
-        to_loc = {ip: loc for ip, loc in zip(unique_ips, unique_locs)}
-        locs = [to_loc[ip] for ip in ips]
+
+        if self.geolocate:
+            # Query only once for each unique IP to save time
+            unique_ips = set(ips)
+            # Handle missing IPs
+            unique_locs = [self.get_loc(ip) if type(ip) == str else (np.nan, np.nan)
+                           for ip in unique_ips]
+            to_loc = {ip: loc for ip, loc in zip(unique_ips, unique_locs)}
+            locs = [to_loc[ip] for ip in ips]
+        else:
+            locs = [('', '') for ip in ips]
         cities, countries = tuple(zip(*locs))
-        year = self.soup.select('.article-meta-value')[3].text.split(' ')[4]
+
+        try:
+            year = self.soup.select('.article-meta-value')[3].text.split(' ')[4]
+        # Fix missing year
+        except:
+            year = str(datetime.now().year)
         dts = [year+'/'+re.search(r'\d{2}/\d{2} \d{2}:\d{2}', ip_dt).group()+':00'
                if re.search(r'\d{2}/\d{2} \d{2}:\d{2}', ip_dt) else np.nan
                for ip_dt in ip_dts]
@@ -240,7 +327,7 @@ class ArticlePage(PTTPage):
         return push_data[['url', 'author', 'push', 'text', 'ip', 'city', 'country', 'dt']]
 
 
-def main(board=None, n_pages=None, fname=None):
+def main(board=None, n_pages=None, fname=None, geolocate=False):
     """
     Scrape PTT articles.
     Default behavior is to scrape backwards ``n_pages`` pages, starting from the latest one.
@@ -248,14 +335,18 @@ def main(board=None, n_pages=None, fname=None):
     
     Parameters
     ----------
-    board : str
-        Board name. If None, default to 'Gossiping'.
+    board : str, default: 'Gossiping'
+        Board name.
     
-    n_pages : int
-        Number of pages to scrape. If None, default to 50.
+    n_pages : int, default: 50
+        Number of pages to scrape.
     
-    fname : str
+    fname : str, optional
         Output file name. If None, default to '{board}_{%Y%m%d}.csv', where {%Y%m%d} is current date.
+    
+    geolocate : bool, default: False
+        Whether to geolocate articles and pushes. If False, `city` and `country` columns will be
+        filled with empty strings.
     """
     if board is None:
         board = 'Gossiping'
@@ -265,16 +356,24 @@ def main(board=None, n_pages=None, fname=None):
         ymd = datetime.now().strftime('%Y%m%d')
         fname = board + '_' + ymd + '.csv'
     
-    next_to_last = IndexPage(host+'/bbs/'+board+'/index.html').get_prev_page()
+    if geolocate:
+        # Load IP cache
+        global cache
+        cache = IPCache()
+        
+        # Initialize RequestQueuer
+        global queuer
+        queuer = RequestQueuer()
+    
+    next_to_last = IndexPage(host+'/bbs/'+board+'/index.html', geolocate).get_prev_page()
     for p in progressbar(list(range(next_to_last-n_pages+2, next_to_last+1)) + ['']):
-        start = time.time()
-        index_page = IndexPage(host+'/bbs/'+board+'/index'+str(p)+'.html')
+        index_page = IndexPage(host+'/bbs/'+board+'/index'+str(p)+'.html', geolocate)
         index_page.write(fname)
-        end = time.time()
-        elapsed = end - start
-        # Make sure not to exceed limit of 120 requests/min (10 s/page)
-        if elapsed < 10:
-            time.sleep(10 - elapsed)
+        
+        if geolocate:
+        # Dump cache every 10 pages
+            if p % 10 == 0:
+                cache.dump()
 
 
 if __name__ == '__main__':
@@ -282,5 +381,7 @@ if __name__ == '__main__':
     parser.add_argument('-b', dest='board')
     parser.add_argument('-p', dest='n_pages', type=int)
     parser.add_argument('-f', dest='fname')
+    parser.add_argument('-l', dest='geolocate', action='store_true')
+    parser.set_defaults(geolocate=False)
     args = parser.parse_args()
-    main(args.board, args.n_pages, args.fname)
+    main(args.board, args.n_pages, args.fname, args.geolocate)
