@@ -19,17 +19,18 @@ The scraped data will be saved as ```Gossiping_YYMMDD.csv```, and has the follow
 | stanley20    | 蘇丹利     | [問卦] google drive 怎麼找影片最快？                  | 2018-04-21 18:15:18 | 58.114.212.121 | nan       | Taiwan             |   984 |      25 |         66 | https://www.ptt.cc/bbs/Gossiping/M.1524305721.A.CA2.html |
 | hahaha0204   | 哈哈哈     | [爆卦] Avicii 過世了                                  | 2018-04-21 01:37:35 | 1.171.192.69   | nan       | Taiwan             |   951 |     100 |        213 | https://www.ptt.cc/bbs/Gossiping/M.1524245858.A.F5B.html |
 
-_**\*Note that currently the main content of articles, including push comments, is not scraped.**_
+_**Note: currently the main content of articles is not scraped.**_
 
 ### Optional flags
 
 You can scrape any number of pages from any board you like, by specifying the following flag(s):
 
-| Flag | Description                 |
-|:-----|:----------------------------|
-| -b   | board name (case-sensitive) |
-| -p   | number of pages to scrape   |
-| -f   | output file name            |
+| Flag | Description                       |
+|:-----|:----------------------------------|
+| -b   | board name (case-sensitive)       |
+| -p   | number of pages to scrape         |
+| -f   | output file name                  |
+| -l   | will only geolocate IPs if passed |
 
 Example command:
 
@@ -38,3 +39,5 @@ $ python pttscraper.py -b Stock -p 100 -f output.csv
 ```
 
 If not passed, default behavior is to scrape 50 pages from the *Gossiping* board.
+
+_**Note: passing the ```-l``` flag will drastically slow down the scraper.**_
