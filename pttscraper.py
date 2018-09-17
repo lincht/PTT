@@ -111,7 +111,7 @@ class IndexPage(PTTPage):
         urls = [host+a['href'] for a in as_]
         # Skip announcements and pinned articles, which may have a special format
         to_remove = [i for i, t in enumerate(titles)
-                     if re.search('^\[公告\]|置底|^\[協尋\]', t)]
+                     if re.search('^\[公告\]|置底|^\[協尋\]|^\[記名公投\]', t)]
         urls = [u for i, u in enumerate(urls) if i not in to_remove]
         articles = [ArticlePage(u, self.geolocate) for u in urls]
         # Keep only intact, non-forward articles
@@ -242,7 +242,9 @@ class ArticlePage(PTTPage):
             ip = self.get_ip()
         
         if ip in cache:
-            return cache[ip]
+            # Because there is no concept of a tuple in the JSON format,
+            # when loaded, tuples become lists
+            return tuple(cache[ip])
         else:
             # Get response
             while True:
@@ -288,7 +290,8 @@ class ArticlePage(PTTPage):
             return None
         push_map = {'推': 1, '→': 0, '噓': -1}
         pushes = [push_map[s.text[0]] for s in push_soup.select('span[class*="push-tag"]')]
-        texts = [s.text[2:] for s in push_soup.select('span[class*="f3 push-content"]')]
+        spans = push_soup.select('div.push > span')
+        texts = [re.sub(r'^: ', '', s.text) for s in spans if 'push-content' in s['class']]
         ip_dts = [s.text.strip() for s in push_soup.select('span[class*="push-ipdatetime"]')]
         ips = [re.match(r'\d{,3}[.]{1}\d{,3}[.]{1}\d{,3}[.]{1}\d{,3}', ip_dt).group()
                if re.match(r'\d{,3}[.]{1}\d{,3}[.]{1}\d{,3}[.]{1}\d{,3}', ip_dt) else np.nan
