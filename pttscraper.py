@@ -185,7 +185,10 @@ class ArticlePage(PTTPage):
         """Check article metadata for integrity."""
         metas = self.soup.select('.article-meta-value')
         board = re.search(r'bbs/(.*?)/', self.url).group(1)
-        return len(metas) == 4 and metas[1].text == board
+        return (len(metas) == 4
+                and metas[1].text == board
+                # Also skip articles missing any part of timestamp before year
+                and len(re.split(r' +', metas[3].text)) >= 4)
 
     def is_forward(self):
         """Check if the current article is a forward."""
@@ -309,11 +312,12 @@ class ArticlePage(PTTPage):
             locs = [('', '') for ip in ips]
         cities, countries = tuple(zip(*locs))
 
-        try:
-            year = self.soup.select('.article-meta-value')[3].text.split(' ')[4]
-        # Fix missing year
-        except:
+        dt_str = re.split(r' +', self.soup.select('.article-meta-value')[3].text)
+        # Fix missing or broken year
+        if len(dt_str) != 5 or len(dt_str[4]) != 4:
             year = str(datetime.now().year)
+        else:
+            year = dt_str[4]
         dts = [year+'/'+re.search(r'\d{2}/\d{2} \d{2}:\d{2}', ip_dt).group()+':00'
                if re.search(r'\d{2}/\d{2} \d{2}:\d{2}', ip_dt) else np.nan
                for ip_dt in ip_dts]
